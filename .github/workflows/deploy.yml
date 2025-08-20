@@ -1,0 +1,71 @@
+name: Terraform Apply, Build Docker Image, and Push to ECR
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract image names and generate terraform.tfvars
+        run: |
+          repositories=()
+          while IFS= read -r line; do
+            if [[ ! -z "$line" ]]; then
+              name=$(echo "$line" | cut -d':' -f1 | tr '/:' '-')
+              repositories+=("\"$name\"")
+            fi
+          done < docker-images.txt
+
+          joined_repos=$(IFS=, ; echo "${repositories[*]}")
+
+          echo "repositories = [${joined_repos}]" > terraform/terraform.tfvars
+          echo "REPO_LIST=${joined_repos}" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: ./terraform
+        run: terraform apply -auto-approve
+
+      - name: Login to AWS ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+      - name: Build, Tag, and Push Docker Images
+        run: |
+          while IFS= read -r line; do
+            if [[ ! -z "$line" ]]; then
+              image=$line
+              name=$(echo "$line" | cut -d':' -f1 | tr '/:' '-')
+              tag=$(echo "$line" | cut -d':' -f2)
+              ecr_repo="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/${name}"
+
+              docker build -t "$name:$tag" .
+
+              docker tag "$name:$tag" "$ecr_repo:$tag"
+
+              docker push "$ecr_repo:$tag"
+            fi
+          done < docker-images.txt
