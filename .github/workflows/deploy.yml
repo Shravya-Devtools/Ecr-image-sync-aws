@@ -3,7 +3,7 @@ name: Terraform Apply, Build Docker Image, and Push to ECR
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
 
@@ -69,3 +69,4 @@ jobs:
               docker push "$ecr_repo:$tag"
             fi
           done < docker-images.txt
+
